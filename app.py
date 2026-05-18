@@ -47,7 +47,7 @@ def whatsapp_reply():
         
         # Gemini AI Generation
         response = client.models.generate_content(
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-1.0-pro')
             contents=user_msg,
             config=types.GenerateContentConfig(
                 system_instruction=alisha_rules
