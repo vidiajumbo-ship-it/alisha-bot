@@ -10,10 +10,10 @@ app = Flask(__name__)
 # ⚠️ Railway ke Variables se key uthane ke liye
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") 
 
-# Gemini client setup (Naya SDK)
+# Gemini client setup - Naye SDK mein key yahan pass karna zaroori hai
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# 📜 ALISHA KE RULES AUR EAT & PARK KA DETAILED MENU
+# 📜 ALISHA KE RULES AUR EAT & PARK KA DETAILED MENU (Yeh waise hi rahega jaise pehle tha)
 ALISHA_RULES = (
     "You are Alisha, a polite, warm, and professional female host for 'Eat & Park Restaurant' located at Girja More, Ara. "
     "Greet customers with respect. Guide them about the food menu beautifully in Hindi/Hinglish. "
@@ -37,7 +37,7 @@ ALISHA_RULES = (
     "RULE 1: Agar customer poora menu maange, toh saari 200 items ek saath mat bhejo. Unhe main categories dikhao aur bolo 'Aapko isme se kya pasand hai? Mujhe batayein mai rates bhej deti hoon.'\n"
     "RULE 2: Agar customer specific category maange, toh upar se dekh kar un items ki complete list daam ke saath sundar tarike se dikhao.\n"
     "RULE 3: Agar customer bole ki 'Order confirm karna hai', 'Delivery chahiye', ya 'Table book karni hai', toh unhe bolo ki order likhwane ke liye wo hamare helpline numbers par call ya WhatsApp karein. "
-    "Give these exact contact numbers: 📞 8271918062 या 📞 7303267750. Kaho ki 'Aap in numbers par click karke direct call karke apna swadisht khana order kar sakte hain!'\n"
+    "Give these exact contact numbers: 📞 8271918062 या 📞 7303267750.\n"
     "RULE 4: Hamesha polite aur hospitable rehna hai jaise ek restaurant ki host rehti hai."
 )
 
@@ -47,27 +47,19 @@ def whatsapp_reply():
         user_msg = request.values.get('Body', '').strip()
         print(f"Incoming Message: {user_msg}")
         
-        ai_reply = "Sorry, abhi system thoda busy hai. Kripya ek baar fir try karein!"
-        
-        # Retry System: Agar server paid tier par bhi traffic spike jhele, toh 3 baar try karega
-        for i in range(3):
-            try:
-                # Naye SDK ke hisab se ekdum correct structure
-                response = client.models.generate_content(
-                    model='gemini-1.5-flash', # Ekdum stable paid model
-                    contents=user_msg,
-                    config=types.GenerateContentConfig(
-                        system_instruction=ALISHA_RULES
-                    ),
-                )
-                ai_reply = response.text
-                break # Agar response mil gaya toh loop se bahar nikal jao
-            except Exception as gemini_err:
-                print(f"Gemini Attempt {i+1} failed: {gemini_err}")
-                time.sleep(2)
+        # Ab hum direct try karenge bina error ko chhipaye, taaki WhatsApp par hi real error dikh jaye
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',  # Paid active account ke liye sabse best aur fast model
+            contents=user_msg,
+            config=types.GenerateContentConfig(
+                system_instruction=ALISHA_RULES
+            ),
+        )
+        ai_reply = response.text
                 
     except Exception as e:
-        ai_reply = f"System Error: {str(e)}"
+        # 🚨 Agar koi galti hogi, toh ab yeh direct aapko WhatsApp par error message bhej dega (Jaise API key issue ya limit issue)
+        ai_reply = f"Gemini Error: {str(e)}"
     
     # Twilio Response setup
     resp = MessagingResponse()
