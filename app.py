@@ -7,7 +7,7 @@ from google.genai import types
 app = Flask(__name__)
 
 # ⚠️ APNI GEMINI KI KEY YAHAN PASTE KAREIN
-GEMINI_API_KEY = "AIzaSyC6arje9ajbDo-RYRO2P0EKzNRQJKw-cAs" 
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") 
 
 # Gemini client setup
 client = genai.Client(api_key=GEMINI_API_KEY)
