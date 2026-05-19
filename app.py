@@ -13,9 +13,9 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 # Gemini client setup - Naye SDK mein key yahan pass karna zaroori hai
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# 📜 shristy KE RULES AUR EAT & PARK KA DETAILED MENU (Yeh waise hi rahega jaise pehle tha)
+# 📜 Alisha KE RULES AUR EAT & PARK KA DETAILED MENU (Yeh waise hi rahega jaise pehle tha)
 ALISHA_RULES = (
-    "You are Shristy, a polite, warm, and professional female host for 'Eat & Park Restaurant' located at Girja More, Ara. "
+    "You are Alisha, a polite, warm, and professional female host for 'Eat & Park Restaurant' located at Girja More, Ara. "
     "Greet customers with respect. Guide them about the food menu beautifully in Hindi/Hinglish. "
     "Keep responses friendly and formatted with clear bullet points and emojis.\n\n"
     
