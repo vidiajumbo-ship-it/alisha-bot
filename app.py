@@ -1,26 +1,45 @@
 import os
 import time
 import re
-from flask import Flask, request
+import json
+from flask import Flask, request, Response
 from twilio.twiml.messaging_response import MessagingResponse
 from google import genai
 from google.genai import types
 
 app = Flask(__name__)
 
-# Railway ke Variables se key uthana
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") 
+# Environment Configuration
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+ADMIN_PHONE = os.environ.get("ADMIN_PHONE", "")  # e.g., "whatsapp:+91XXXXXXXXXX"
 
-# Gemini client setup
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# 📜 GLOBAL VARIABLES FOR REPORT AND AVAILABILITY
-# Note: Server restart hone par ye memory clear ho sakti hai, par daily/weekly track ke liye perfect hai.
-monthly_sale = 0
-monthly_expense = 0
-stopped_items = []
+# ----------------- PERSISTENT DATA LAYER (JSON) -----------------
+DATA_FILE = "bot_data.json"
 
-# 📜 ALISHA KE SMART RULES & EXACT MENU DATA
+def load_data():
+    default_data = {
+        "monthly_sale": 0,
+        "monthly_expense": 0,
+        "stopped_items": []
+    }
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return default_data
+    return default_data
+
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+# Initialize data
+store = load_data()
+
+# ----------------- PROMPT TEMPLATE -----------------
 ALISHA_RULES_TEMPLATE = (
     "You are Alisha, the ultra-smart, polite, and professional female host for 'Eat & Park Restaurant' located at Girja More, Ara. "
     "Greet customers beautifully with emojis. Speak in simple, attractive Hinglish (Hindi in English script).\n\n"
@@ -52,79 +71,95 @@ ALISHA_RULES_TEMPLATE = (
     "RULE 4: Hamesha polite rehna hai aur ek baar me saara menu nahi bhejoge."
 )
 
-# Admin Tracker parsing logic
+# ----------------- PARSING LOGIC -----------------
 def parse_admin_record(text):
-    global monthly_sale, monthly_expense
+    global store
     try:
-        sale_match = re.search(r'sale\s*(\d+)', text, re.IGNORECASE)
-        sale = int(sale_match.group(1)) if sale_match else 0
-        
-        expenses = re.findall(r'(?<!sale\s)(?:[a-zA-Z\s&]+)\s*(\d+)', text, re.IGNORECASE)
-        total_expense = sum(int(x) for x in expenses)
-        
-        # Monthly data update
-        monthly_sale += sale
-        monthly_expense += total_expense
+        clean_text = text.split(":", 1)[1].strip() if ":" in text else text
+        entries = [item.strip() for item in clean_text.split(",") if item.strip()]
+
+        sale = 0
+        total_expense = 0
+
+        for entry in entries:
+            match = re.match(r"([a-zA-Z\s&]+)\s+(\d+)", entry)
+            if match:
+                key = match.group(1).strip().lower()
+                amount = int(match.group(2))
+
+                if "sale" in key:
+                    sale += amount
+                else:
+                    total_expense += amount
+
+        store["monthly_sale"] += sale
+        store["monthly_expense"] += total_expense
+        save_data(store)
+
         profit = sale - total_expense
-        
-        reply = (
+        return (
             f"📝 **Eat & Park - Daily Hisaab-Kitab**\n\n"
             f"💰 Today's Sale: ₹{sale:,}\n"
             f"💸 Today's Expense: ₹{total_expense:,}\n"
             f"📊 Today's Profit: ₹{profit:,}\n\n"
-            f"✅ Himanshu bhai, aaj ka record save ho gaya aur Monthly Report me jod diya gaya hai!"
+            f"✅ Aaj ka record save ho gaya aur Monthly Report me jod diya gaya hai!"
         )
-        return reply
-    except Exception as e:
-        return f"Hisaab format me galti hai bhai! Kripya is tarah likhein:\n`Add Record: Sale 15000, Chicken 1800, Sabji 600`"
+    except Exception:
+        return "Format galat hai! Is format me bhejein:\n`Add Record: Sale 15000, Chicken 1800, Sabji 600`"
 
+# ----------------- ROUTES -----------------
 @app.route("/whatsapp", methods=['POST'])
 def whatsapp_reply():
-    global monthly_sale, monthly_expense, stopped_items
+    global store
+    resp = MessagingResponse()
+    
     try:
         user_msg = request.values.get('Body', '').strip()
-        print(f"Incoming Message: {user_msg}")
-        
+        sender = request.values.get('From', '')
         user_msg_lower = user_msg.lower()
 
-        # 1. ADMIN MODE: DAILY HISAAB
-        if user_msg_lower.startswith("add record:"):
+        # Optional phone validation (leave blank in env to disable)
+        is_admin = not ADMIN_PHONE or sender == ADMIN_PHONE
+
+        # 1. ADMIN: DAILY HISAAB
+        if is_admin and user_msg_lower.startswith("add record"):
             ai_reply = parse_admin_record(user_msg)
-            
-        # 2. ADMIN MODE: MONTHLY REPORT
-        elif user_msg_lower == "/report":
-            net_monthly_profit = monthly_sale - monthly_expense
+
+        # 2. ADMIN: MONTHLY REPORT
+        elif is_admin and user_msg_lower == "/report":
+            net_profit = store["monthly_sale"] - store["monthly_expense"]
             ai_reply = (
                 f"📊 **Eat & Park - Monthly Business Report**\n\n"
-                f"💰 Total Monthly Sale: ₹{monthly_sale:,}\n"
-                f"💸 Total Monthly Expense: ₹{monthly_expense:,}\n"
-                f"📈 Net Monthly Profit (Kamai): ₹{net_monthly_profit:,}\n\n"
-                f"💼 Keep crushing it, Himanshu bhai! Rocket Business! 🚀"
+                f"💰 Total Monthly Sale: ₹{store['monthly_sale']:,}\n"
+                f"💸 Total Monthly Expense: ₹{store['monthly_expense']:,}\n"
+                f"📈 Net Monthly Profit (Kamai): ₹{net_profit:,}\n\n"
+                f"💼 Keep crushing it! Rocket Business! 🚀"
             )
-            
-        # 3. ADMIN MODE: STOP ITEM
-        elif user_msg_lower.startswith("/stop "):
-            item_to_stop = user_msg[6:].strip()
-            if item_to_stop not in stopped_items:
-                stopped_items.append(item_to_stop)
-            ai_reply = f"🚫 Mode Updated: Alisha ab customers ko **{item_to_stop}** finished batayegi aur kuch aur suggest karegi."
-            
-        # 4. ADMIN MODE: START ITEM
-        elif user_msg_lower.startswith("/start "):
-            item_to_start = user_msg[7:].strip()
-            if item_to_start in stopped_items:
-                stopped_items.remove(item_to_start)
-            ai_reply = f"✅ Mode Updated: **{item_to_start}** ab wapas menu me available ho gaya hai!"
-            
-        # 5. CUSTOMER MODE WITH AI
-        else:
-            ai_reply = "Namaste! Eat & Park me aapka swagat hai. Humara system abhi thoda busy hai, kripya ek aur baar message bhejkar try kijiye!"
-            
-            # Stopped items ka text format banana
-            stopped_list_text = ", ".join(stopped_items) if stopped_items else "None (All items available)"
-            dynamic_rules = ALISHA_RULES_TEMPLATE.format(stopped_list_text=stopped_list_text)
 
-            for i in range(3):
+        # 3. ADMIN: STOP ITEM
+        elif is_admin and user_msg_lower.startswith("/stop "):
+            item = user_msg[6:].strip()
+            if item and item not in store["stopped_items"]:
+                store["stopped_items"].append(item)
+                save_data(store)
+            ai_reply = f"🚫 Mode Updated: Alisha ab customers ko **{item}** finished batayegi."
+
+        # 4. ADMIN: START ITEM
+        elif is_admin and user_msg_lower.startswith("/start "):
+            item = user_msg[7:].strip()
+            if item in store["stopped_items"]:
+                store["stopped_items"].remove(item)
+                save_data(store)
+            ai_reply = f"✅ Mode Updated: **{item}** wapas menu me live ho gaya hai!"
+
+        # 5. CUSTOMER MODE (AI RESPONSE)
+        else:
+            stopped_text = ", ".join(store["stopped_items"]) if store["stopped_items"] else "None (All available)"
+            dynamic_rules = ALISHA_RULES_TEMPLATE.format(stopped_list_text=stopped_text)
+            
+            ai_reply = "Namaste! Eat & Park me aapka swagat hai. Humara server abhi busy hai, kripya thodi der me koshish karein."
+
+            for attempt in range(3):
                 try:
                     response = client.models.generate_content(
                         model='gemini-2.5-flash',
@@ -133,23 +168,21 @@ def whatsapp_reply():
                             system_instruction=dynamic_rules
                         ),
                     )
-                    ai_reply = response.text
+                    if response.text:
+                        ai_reply = response.text.strip()
                     break
-                except Exception as gemini_err:
-                    print(f"Gemini Attempt {i+1} failed: {gemini_err}")
-                    time.sleep(2)
-                
+                except Exception as err:
+                    time.sleep(1.5)
+
     except Exception as e:
-        ai_reply = f"Gemini Error: {str(e)}"
-    
-    # Twilio Response setup
-    resp = MessagingResponse()
+        ai_reply = "System technical update me hai, kripya direct call karein: 📞 8271918062"
+
     resp.message(ai_reply)
-    return str(resp)
+    return Response(str(resp), mimetype="application/xml")
 
 @app.route("/", methods=['GET'])
 def home():
-    return "Eat & Park Alisha Management Bot is running perfectly!"
+    return "Eat & Park Alisha Management Bot is running smoothly!"
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
