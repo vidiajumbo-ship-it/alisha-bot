@@ -1060,7 +1060,7 @@ const WaiterOrderPanel = memo(({ menu, table, setTable, onSubmit, onClose, onAdd
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [notes, setNotes] = useState("");
-  const [orderMode, setOrderMode] = useState("dine_in"); // "dine_in" | "parcel"
+  const [orderMode, setOrderMode] = useState("dine_in"); 
   const [placedOrder, setPlacedOrder] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -1184,6 +1184,7 @@ const WaiterOrderPanel = memo(({ menu, table, setTable, onSubmit, onClose, onAdd
   customerName: customerName || "Walk-in",
   customerPhone: customerPhone || "",
   notes
+});
 });
       } catch (err) {
         console.error(err);
