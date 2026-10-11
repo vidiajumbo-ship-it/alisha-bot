@@ -1,9 +1,6 @@
 
 /* eslint-disable */
-
-/* eslint-disable */
 import { getAuth, signInWithEmailAndPassword } from "firebase/auth";
- c59ac2fe05533bcd14d01af2ee227a4555f0119c
 import React, { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import { db } from "./firebase";
 import {
@@ -14,14 +11,19 @@ import {
 import { QRCodeSVG } from 'qrcode.react';
 function ImageUploadButton({ currentImage, onUploaded, label }) {
   const widgetRef = useRef(null);
+  const onUploadedRef = useRef(onUploaded);
+  onUploadedRef.current = onUploaded;
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
+    let tries = 0;
     const tryInit = () => {
+      if (cancelled) return;
       if (window.cloudinary) {
         widgetRef.current = window.cloudinary.createUploadWidget(
           {
-            cloudName: "5dfc389197bbc293b64579d25342c4",
+            cloudName: "nnddxvcn",
             uploadPreset: "eatpark_uploads",
             sources: ["local", "camera", "url"],
             multiple: false,
@@ -30,20 +32,24 @@ function ImageUploadButton({ currentImage, onUploaded, label }) {
           },
           (error, result) => {
             if (error) {
-              alert("Upload fail: " + (error.message || "Error"));
+              console.error("Cloudinary error:", error);
+              alert("Upload fail: " + (error.statusText || error.message || JSON.stringify(error)));
               return;
             }
             if (result && result.event === "success") {
-              onUploaded(result.info.secure_url);
+              onUploadedRef.current(result.info.secure_url);
             }
           }
         );
         setReady(true);
-      } else {
+      } else if (++tries < 20) {
         setTimeout(tryInit, 300);
+      } else {
+        alert("Cloudinary script load nahi hui. public/index.html check karo.");
       }
     };
     tryInit();
+    return () => { cancelled = true; };
   }, []);
 
   const openWidget = () => {
@@ -189,7 +195,7 @@ function escapeHtml(s) {
 // Ek hi jagah se order total (coupon + loyalty + delivery sab included)
 function getOrderTotal(o) {
   const hasRunning = (o?.kots || []).some(k => k.isRunning);
-  if (Number.isFinite(o?.finalTotal) && !hasRunning) return o.finalTotal;
+  if (Number.isFinite(o?.finalTotal) && (!hasRunning || o?.billEditedAt)) return o.finalTotal;
   const sub = (o?.items || []).reduce((s, it) => s + it.price * it.qty, 0);
   const coupon = Math.round((sub * (o?.discount || 0)) / 100);
   return Math.max(0, sub - coupon - (o?.loyaltyDiscount || 0)) + (o?.deliveryFee || 0);
@@ -427,7 +433,6 @@ const FlashSaleItem = memo(({ item, onAdd }) => {
         <span style={{ fontWeight: 800, color: COLORS.error }}>₹{item.discountPrice}</span>
         <span style={{ textDecoration: 'line-through', fontSize: 12, color: COLORS.textLight }}>₹{item.price}</span>
       </div>
-      {item.stock != null && item.stock <= 5 && (<div style={{ fontSize: 11, color: COLORS.error, fontWeight: 700, marginBottom: 4 }}>Only {item.stock} left!</div>)}
       {item.stock != null && item.stock <= 5 && (<div style={{ fontSize: 11, color: COLORS.error, fontWeight: 700, marginBottom: 4 }}>Only {item.stock} left!</div>)}
       <button onClick={onAdd} style={{ background: COLORS.error, color: '#fff', border: 'none', padding: '4px 12px', borderRadius: 6, fontWeight: 700, width: '100%', cursor: 'pointer' }}>Add</button>
     </div>
@@ -862,20 +867,18 @@ const TableStatusBoard = memo(({ orders, tables = 12, onTableClick, showStats = 
 
   const stats = useMemo(() => {
     const active = tableData.filter(t => t.order);
-    const totalAmount = active.reduce((s, t) => 
-      s + t.order.items.reduce((a, i) => a + i.price * i.qty, 0), 0
-    );
+    const totalAmount = active.reduce((sum, t) => sum + getOrderTotal(t.order), 0);
     return {
       occupied: active.length,
       empty: tables - active.length,
-      running: totalAmount
+      running: totalAmount,
     };
   }, [tableData, tables]);
-
+   
   const statusColors = {
-    empty: { bg: "#E8F5E9", border: "#4A7C59", label: "Empty", emoji: "🟢" },
+    empty:    { bg: "#E8F5E9", border: "#4A7C59", label: "Empty",    emoji: "🟢" },
     occupied: { bg: "#FFEBEE", border: "#EF4444", label: "Occupied", emoji: "🔴" },
-    billing: { bg: "#FFF8E1", border: "#FF9800", label: "Billing", emoji: "🟡" }
+    billing:  { bg: "#FFF8E1", border: "#FF9800", label: "Billing",  emoji: "🟡" },
   };
 
   const formatTime = (ts) => {
@@ -969,8 +972,8 @@ const TableStatusBoard = memo(({ orders, tables = 12, onTableClick, showStats = 
         {tableData.map(t => {
           const c = statusColors[t.status];
           const o = t.order;
-          const total = o ? o.items.reduce((s, i) => s + i.price * i.qty, 0) : 0;
-          const itemCount = o ? o.items.reduce((s, i) => s + i.qty, 0) : 0;
+          const total = o ? getOrderTotal(o) : 0;
+          const itemCount = o ? o.items.reduce((sum, i) => sum + i.qty, 0) : 0;
 
           return (
             <button
@@ -1057,6 +1060,7 @@ const WaiterOrderPanel = memo(({ menu, table, setTable, onSubmit, onClose, onAdd
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [notes, setNotes] = useState("");
+  const [orderMode, setOrderMode] = useState("dine_in"); // "dine_in" | "parcel"
   const [placedOrder, setPlacedOrder] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -1173,7 +1177,14 @@ const WaiterOrderPanel = memo(({ menu, table, setTable, onSubmit, onClose, onAdd
       });
       let created = null;
       try {
-        created = await onSubmit({ table, items, waiterName, customerName: customerName || "Walk-in", customerPhone: customerPhone || "", notes });
+      created = await onSubmit({
+  table: orderMode === "parcel" ? 0 : table,
+  orderType: orderMode,
+  items, waiterName,
+  customerName: customerName || "Walk-in",
+  customerPhone: customerPhone || "",
+  notes
+});
       } catch (err) {
         console.error(err);
         alert("❌ Order send nahi hua. Internet check karke dobara try karo.");
@@ -1264,7 +1275,7 @@ const WaiterOrderPanel = memo(({ menu, table, setTable, onSubmit, onClose, onAdd
                 <div style={{ fontSize: 11, color: COLORS.textLight, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   {o.waiter && <span>🧑‍🍳 {o.waiter}</span>}
                   <span>· {o.items.length} item{o.items.length !== 1 ? 's' : ''}</span>
-                  <span>· ₹{o.items.reduce((s, it) => s + it.price * it.qty, 0)}</span>
+                  <span>· ₹{getOrderTotal(o)}</span>
                   <span>· {timeAgo(o.createdAt)}</span>
                 </div>
               </div>
@@ -1563,12 +1574,44 @@ const WaiterOrderPanel = memo(({ menu, table, setTable, onSubmit, onClose, onAdd
           </div>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
-          <input placeholder="Waiter Name" value={waiterName} onChange={e => setWaiterName(e.target.value)} style={inputStyle} />
-          <select value={table} onChange={e => setTable(Number(e.target.value))} style={{ ...inputStyle, background: "#fff" }}>
-            {Array.from({ length: 12 }, (_, i) => i + 1).map(n => <option key={n} value={n}>Table {n}</option>)}
-          </select>
-        </div>
+        <div style={{ marginBottom: 12 }}>
+  <input placeholder="Waiter Name" value={waiterName} onChange={e => setWaiterName(e.target.value)} style={{ ...inputStyle, marginBottom: 10 }} />
+
+  {/* 🆕 Dine-in / Parcel toggle */}
+  <div style={{ display: "flex", gap: 8 }}>
+    <button
+      type="button"
+      onClick={() => setOrderMode("dine_in")}
+      style={{
+        flex: 1, padding: "12px 8px", borderRadius: 10,
+        border: `2px solid ${orderMode === "dine_in" ? COLORS.copper : COLORS.line}`,
+        background: orderMode === "dine_in" ? COLORS.copper : "#fff",
+        color: orderMode === "dine_in" ? "#fff" : COLORS.ink,
+        fontWeight: 800, fontSize: 13, cursor: "pointer"
+      }}>
+      🍽️ Table
+    </button>
+    <button
+      type="button"
+      onClick={() => setOrderMode("parcel")}
+      style={{
+        flex: 1, padding: "12px 8px", borderRadius: 10,
+        border: `2px solid ${orderMode === "parcel" ? COLORS.copper : COLORS.line}`,
+        background: orderMode === "parcel" ? COLORS.copper : "#fff",
+        color: orderMode === "parcel" ? "#fff" : COLORS.ink,
+        fontWeight: 800, fontSize: 13, cursor: "pointer"
+      }}>
+      🛍️ Parcel
+    </button>
+  </div>
+
+  {/* Table dropdown sirf Dine-in me */}
+  {orderMode === "dine_in" && (
+    <select value={table} onChange={e => setTable(Number(e.target.value))} style={{ ...inputStyle, background: "#fff", marginTop: 10 }}>
+      {Array.from({ length: 12 }, (_, i) => i + 1).map(n => <option key={n} value={n}>Table {n}</option>)}
+    </select>
+  )}
+</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
           <input placeholder="Customer Name (optional)" value={customerName} onChange={e => setCustomerName(e.target.value)} style={inputStyle} />
           <input placeholder="Customer Phone (optional)" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} style={inputStyle} />
@@ -1648,31 +1691,7 @@ function CustomerView({ menu, orders, placeOrder, bookEvent, gallery, offersList
 
   cartRef.current = cart;
   useEffect(() => () => clearTimeout(aiTimerRef.current), []);
-
-  const handleEmailLogin = async (email, password, expectedRole) => {
-    try {
-      const auth = getAuth();
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      const user = userCredential.user;
-
-      // Fetch user role from Firestore
-      const userDoc = await getDoc(doc(db, "users", user.uid));
-      if (userDoc.exists()) {
-        const userData = userDoc.data();
-        if (userData.role === expectedRole || (expectedRole === "staff" && userData.role === "admin")) {
-          setRole(userData.role);
-          setShowPinModal(false);
-        } else {
-          alert("❌ You do not have permission for this role.");
-        }
-      }
-    } catch (error) {
-      alert("❌ Login failed: " + error.message);
-    }
-  };
-  cartRef.current = cart;
-  useEffect(() => () => clearTimeout(aiTimerRef.current), []);
- c59ac2fe05533bcd14d01af2ee227a4555f0119c
+ 
   const [showWaiterMode, setShowWaiterMode] = useState(false);
     const [showWaiterPinModal, setShowWaiterPinModal] = useState(false);
   const [waiterPinInput, setWaiterPinInput] = useState("");
@@ -1798,37 +1817,15 @@ if (savedCart) {
       return next;
     });
   }, [menu]);
-  const handleSetQtyOld2 = useCallback((id, q) => { ... }); = useCallback((id, q) => {
-    const prevCart = cartRef.current;
-    const oldQty = getCartQty(prevCart[id]);
-    if (q > oldQty && q === 1) {
-      const options = getSmartSuggestionPool(menu, prevCart);
-      if (options.length > 0) {
-        setAiSuggestion(options[Math.floor(Math.random() * options.length)]);
-        clearTimeout(aiTimerRef.current);
-        aiTimerRef.current = setTimeout(() => setAiSuggestion(null), 6000);
-      }
 
-    setCart((prev) => {
-      const next = { ...prev };
-      if (q <= 0) delete next[id];
-      else {
-        const existingOverride = prev[id]?.priceOverride;
-        next[id] = existingOverride != null ? { qty: q, priceOverride: existingOverride } : { qty: q };
-      }
-      return next;
-    });
-  }, [menu]);
- 
-   
-  const toggleFavorite = useCallback((itemId) => {
+    const toggleFavorite = useCallback((itemId) => {
     if (favorites.includes(itemId)) {
       setFavorites(favorites.filter(id => id !== itemId));
       showToast('Removed from favorites', 'info');
     } else {
       setFavorites([...favorites, itemId]);
       showToast('Added to favorites!', 'success');
- c59ac2fe05533bcd14d01af2ee227a4555f0119c
+ 
     }
   }, [favorites, setFavorites, showToast]);
   const toggleFavoriteOld = useCallback((itemId) => {
@@ -1875,6 +1872,36 @@ if (savedCart) {
 
   const addRunningItems = useCallback(async (orderId, newItems) => {
     try {
+      let taggedItems = [];
+      let tableNo = "";
+      await runTransaction(db, async (tx) => {
+        const ref = doc(db, "orders", orderId);
+        const snap = await tx.get(ref);
+        if (!snap.exists()) throw new Error("Order not found");
+        const o = snap.data();
+        const baseKots = (o.kots?.length
+          ? o.kots
+          : [{ id: uid("kot"), kotNumber: 1, items: o.items, createdAt: o.createdAt, status: o.status }]
+        ).map(k => (k.status === "new" && o.status !== "new") ? { ...k, status: o.status } : k);
+        const nextNo = Math.max(...baseKots.map(k => k.kotNumber || 1)) + 1;
+        taggedItems = newItems.map(it => ({ ...it, kotNumber: nextNo }));
+        tableNo = o.table;
+        tx.update(ref, {
+          kots: [...baseKots, { id: uid("kot"), kotNumber: nextNo, items: taggedItems, createdAt: Date.now(), status: "new", isRunning: true }],
+          items: [...(o.items || []), ...taggedItems],
+          status: "new",
+          lastKotAt: Date.now()
+        });
+      });
+      const addedTotal = taggedItems.reduce((s, it) => s + it.price * it.qty, 0);
+      const waText = `🍳 *RUNNING KOT* — Order #${orderId.slice(1, 5).toUpperCase()}\nTable ${tableNo}\n` + taggedItems.map(i => `• ${i.qty}x ${i.name}`).join("\n") + `\n\nAdditional: ₹${addedTotal}`;
+      window.open(`https://wa.me/${RESTAURANT.whatsapp}?text=${encodeURIComponent(waText)}`, "_blank");
+      setRunningOrderId(null);
+      showToast("🍳 New KOT sent to kitchen!", "success");
+    } catch (e) { console.error(e); showToast("⚠️ Failed to add items", "error"); }
+  }, [showToast]);
+  const addRunningItemsPrev = useCallback(async (orderId, newItems) => {
+    try {
       const order = orders.find(o => o.id === orderId);
       if (!order) return;
       const baseKots = order.kots?.length
@@ -1912,11 +1939,11 @@ if (savedCart) {
     } catch (e) { showToast("⚠️ Failed to add items", "error"); }
   }, [orders, showToast]);
 
-  const handleWaiterOrder = useCallback(async ({ table: t, items, waiterName, customerName, customerPhone, notes: orderNotes }) => {
+  const handleWaiterOrder = useCallback(async ({ table: t, orderType: ot, items, waiterName, customerName, customerPhone, notes: orderNotes }) => {
     const orderId = uid("o");
     const total = items.reduce((s, it) => s + it.price * it.qty, 0);
     const order = {
-      id: orderId, table: t, orderType: "dine_in",
+      id: orderId, table: t, orderType: ot || "dine_in",
       customer: { name: customerName, phone: customerPhone || "WALK-IN", address: "" },
       items, waiter: waiterName || "Staff", takenBy: "waiter",
       kots: [{ id: uid("kot"), kotNumber: 1, items: items.map(it => ({ ...it, kotNumber: 1 })), createdAt: Date.now(), status: "new", isRunning: false }],
@@ -1928,7 +1955,8 @@ if (savedCart) {
     };
     await placeOrder(order);
     playNotificationSound();
-    const waText = `🧑‍🍳 *WAITER ORDER* (#${orderId.slice(1, 5).toUpperCase()})\nTable ${t} · Waiter: ${waiterName || "Staff"}\nCustomer: ${customerName}\n` + items.map(i => `• ${i.qty}x ${i.name}`).join("\n") + (orderNotes ? `\nNotes: ${orderNotes}` : "") + `\n\nTotal: ₹${total}`;
+    const typeLabel = ot === "parcel" ? "🛍️ *PARCEL ORDER*" : `🍽️ Table ${t}`;
+    const waText = `🧑‍🍳 *WAITER ORDER* (#${orderId.slice(1, 5).toUpperCase()})\n${typeLabel} · Waiter: ${waiterName || "Staff"}\nCustomer: ${customerName}\n` + items.map(i => `• ${i.qty}x ${i.name}`).join("\n") + (orderNotes ? `\nNotes: ${orderNotes}` : "") + `\n\nTotal: ₹${total}`;
     window.open(`https://wa.me/${RESTAURANT.whatsapp}?text=${encodeURIComponent(waText)}`, "_blank");
     return order;
   }, [placeOrder]);
@@ -2325,6 +2353,31 @@ const handleWaiterPinSubmitOld = () => {
   showToast("✅ Booking Sent! WhatsApp kholo aur Send dabao.", 'success');
 };
   const addComboToCart = useCallback((combo) => {
+    try {
+      const lines = (combo.items || []).map(it => ({ ...it, quantity: Number(it.quantity) || 1, menuItem: menu.find(m => m.id === it.id) }));
+      if (lines.length === 0 || lines.some(l => !l.menuItem || !l.menuItem.available)) { showToast("⚠️ Combo ka koi item available nahi", 'warning'); return; }
+      const totalMenuPrice = lines.reduce((s, l) => s + l.menuItem.price * l.quantity, 0);
+      const finalPrice = Number(combo.finalPrice);
+      if (!(totalMenuPrice > 0) || !Number.isFinite(finalPrice)) { showToast("⚠️ Combo ka price set nahi hai", 'warning'); return; }
+      const ratio = finalPrice / totalMenuPrice;
+      setCart(prev => {
+        const next = { ...prev };
+        lines.forEach(l => {
+          const prevEntry = next[l.id];
+          const prevQty = getCartQty(prevEntry);
+          const prevPrice = prevEntry?.priceOverride ?? l.menuItem.price;
+          const newQty = prevQty + l.quantity;
+          next[l.id] = { qty: newQty, priceOverride: Math.round((prevQty * prevPrice + l.quantity * l.menuItem.price * ratio) / newQty) };
+        });
+        return next;
+      });
+      showToast(`🎉 ${combo.name} added!`, 'success');
+    } catch (e) {
+      console.error("Combo error:", e);
+      showToast("⚠️ Combo error: " + (e?.message || e), 'error');
+    }
+  }, [menu, showToast]);
+  const addComboToCartPrev = useCallback((combo) => {
     const lines = combo.items.map(it => ({ ...it, menuItem: menu.find(m => m.id === it.id) }));
     if (lines.some(l => !l.menuItem || !l.menuItem.available)) { showToast("⚠️ Combo ka koi item available nahi", 'warning'); return; }
     const totalMenuPrice = lines.reduce((s, l) => s + l.menuItem.price * l.quantity, 0);
@@ -3048,7 +3101,7 @@ const KeyboardHelpModal = memo(({ onClose }) => (
   </div>
 ));
 
-function StaffView({ orders, advanceStatus, requestPinPrompt, calls, resolveCall, cancelOrderByStaff }) {
+function StaffView({ menu = [], orders, advanceStatus, requestPinPrompt, calls, resolveCall, cancelOrderByStaff }) {
   const active = orders.filter((o) => o.status !== "served" && o.status !== "cancelled").sort((a, b) => a.createdAt - b.createdAt);
   const activeCalls = calls.filter(c => c.status === 'active');
   const columns = ["new", "preparing", "ready"];
@@ -3056,6 +3109,21 @@ function StaffView({ orders, advanceStatus, requestPinPrompt, calls, resolveCall
   const prevCountRef = useRef(newOrderCount);
   const [selectedOrderId, setSelectedOrderId] = useState(null);
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [billOrder, setBillOrder] = useState(null);
+  const [billEditItems, setBillEditItems] = useState([]);
+  const [billGstRate, setBillGstRate] = useState(0);
+  const [billGstCustom, setBillGstCustom] = useState("");
+  const [billDiscount, setBillDiscount] = useState(0);
+  const [billDiscountPct, setBillDiscountPct] = useState(0);
+  const [billPayMode, setBillPayMode] = useState("cash");
+  const [billPayStatus, setBillPayStatus] = useState("paid");
+  const [billCustomerName, setBillCustomerName] = useState("");
+  const [billCustomerPhone, setBillCustomerPhone] = useState("");
+  const [billCustomerGstin, setBillCustomerGstin] = useState("");
+  const [billNotes, setBillNotes] = useState("");
+  const [billSearch, setBillSearch] = useState("");
+  const [billAddItemOpen, setBillAddItemOpen] = useState(false);
+  const [billShowBillNo, setBillShowBillNo] = useState(true);
 
   useEffect(() => {
     if (newOrderCount > prevCountRef.current) {
@@ -3078,6 +3146,9 @@ function StaffView({ orders, advanceStatus, requestPinPrompt, calls, resolveCall
 
   useEffect(() => {
     const onKey = (e) => {
+      const tag = (e.target?.tagName || "").toUpperCase();
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable) return;
+      if (billOrder) return;
       if (e.key === 'k' && e.ctrlKey) { e.preventDefault(); if (active[0]) setSelectedOrderId(active[0].id); }
       if (e.key === 'ArrowUp') { const i = active.findIndex(o => o.id === selectedOrderId); if (i > 0) setSelectedOrderId(active[i - 1].id); }
       if (e.key === 'ArrowDown') { const i = active.findIndex(o => o.id === selectedOrderId); if (i < active.length - 1 && i >= 0) setSelectedOrderId(active[i + 1].id); }
@@ -3086,7 +3157,7 @@ function StaffView({ orders, advanceStatus, requestPinPrompt, calls, resolveCall
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedOrderId, active, advanceStatus]);
+  }, [selectedOrderId, active, advanceStatus, billOrder]);
 
   const handlePrintReceipt = (order) => {
     const w = window.open('', '_blank', 'width=300,height=600');
@@ -3107,6 +3178,188 @@ function StaffView({ orders, advanceStatus, requestPinPrompt, calls, resolveCall
     w.document.close();
   };
 
+  // 🧾 OPEN BILL EDITOR
+  const openBillEditor = (order) => {
+    setBillOrder(order);
+    setBillEditItems(
+      order.items.map((it, i) => ({
+        ...it,
+        _rowId: i + "_" + Math.random().toString(36).slice(2, 6),
+      }))
+    );
+    setBillGstRate(order.gstRate ?? 0);
+    setBillGstCustom("");
+    setBillDiscount(0);
+    setBillDiscountPct(0);
+    setBillPayMode(order.payment || "cash");
+    setBillPayStatus(order.paid ? "paid" : "pending");
+    setBillCustomerName(order.customer?.name || "");
+    setBillCustomerPhone(order.customer?.phone || "");
+    setBillCustomerGstin("");
+    setBillNotes(order.notes || "");
+    setBillSearch("");
+    setBillAddItemOpen(false);
+    setBillShowBillNo(true);
+  };
+
+  // 🧮 BILL CALC
+  const billCalc = useMemo(() => {
+    if (!billOrder) return { sub: 0, gst: 0, discAmt: 0, discPctAmt: 0, total: 0, gstRate: 0 };
+    const sub = billEditItems.reduce((s, it) => s + (it.price || 0) * (it.qty || 0), 0);
+    const gstRate = billGstRate === "custom" ? Number(billGstCustom) || 0 : Number(billGstRate) || 0;
+    const discPctAmt = Math.round((sub * billDiscountPct) / 100);
+    const afterPct = sub - discPctAmt;
+    const gst = Math.round((afterPct * gstRate) / 100);
+    const total = Math.max(0, afterPct - billDiscount) + gst;
+    return { sub, gstRate, gst, discPctAmt, discAmt: billDiscount, total };
+  }, [billOrder, billEditItems, billGstRate, billGstCustom, billDiscount, billDiscountPct]);
+
+  // 💾 SAVE BILL EDITS TO FIRESTORE
+  const saveBillEdits = async () => {
+    if (!billOrder) return null;
+    try {
+      const { sub, gstRate, gst, discPctAmt, discAmt, total } = billCalc;
+      const updated = {
+        items: billEditItems.map(({ _rowId, ...rest }) => rest),
+        subtotal: sub,
+        gstRate,
+        gstAmount: gst,
+        billDiscount: discAmt,
+        billDiscountPct: billDiscountPct,
+        billDiscountAmt: discPctAmt,
+        finalTotal: total,
+        payment: billPayMode,
+        paid: billPayStatus === "paid",
+        paymentStatus: billPayStatus,
+        customer: {
+          ...(billOrder.customer || {}),
+          name: billCustomerName || "Walk-in",
+          phone: billCustomerPhone || "WALK-IN",
+        },
+        customerGstin: billCustomerGstin || "",
+        notes: billNotes,
+        billEditedAt: Date.now(),
+        billEditedBy: "staff",
+      };
+      await updateDoc(doc(db, "orders", billOrder.id), updated);
+      return { ...billOrder, ...updated };
+    } catch (e) {
+      console.error("saveBillEdits error:", e);
+      alert("⚠️ Save fail: " + e.message);
+      return null;
+    }
+  };
+
+  // 🖨️ PRINT FINAL BILL
+  const printFinalBill = (order, items) => {
+    if (!order) return;
+    const { sub, gstRate, gst, discPctAmt, discAmt, total } = billCalc;
+    const payLabel = {
+      cash: "Cash",
+      upi: "UPI",
+      card: "Card",
+      razorpay: "Razorpay",
+      due: "Due (Udhaar)",
+    }[billPayMode] || billPayMode;
+
+    const billNo = order.id.slice(1, 9).toUpperCase();
+    const now = new Date().toLocaleString("en-IN", {
+      day: "2-digit", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+
+    const itemsHtml = items
+      .map(
+        (it) => `<tr>
+        <td style="text-align:left">${escapeHtml(it.name)}${it.portion ? ` <small>(${escapeHtml(it.portion)})</small>` : ""}</td>
+        <td style="text-align:center">${it.qty}</td>
+        <td style="text-align:right">₹${it.price}</td>
+        <td style="text-align:right">₹${it.price * it.qty}</td>
+      </tr>`
+      )
+      .join("");
+
+    const billNoLine = billShowBillNo ? `<div><b>Bill #:</b> ${billNo}</div>` : `<div>&nbsp;</div>`;
+
+    // Hidden iframe (popup block nahi hota)
+    const iframe = document.createElement("iframe");
+    iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;";
+    document.body.appendChild(iframe);
+    const w = iframe.contentWindow;
+    setTimeout(() => { try { document.body.removeChild(iframe); } catch (e) {} }, 60000);
+
+    w.document.open();
+    w.document.write(`<!doctype html>
+<html><head><title>Bill ${billNo}</title>
+<style>
+  *{box-sizing:border-box;color:#000 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  div,span,b{font-size:13px !important;font-weight:700}
+  @page{margin:0}
+  body{font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:700;padding:8px;width:290px;margin:0 auto;color:#000}
+  h2,h4{text-align:center;margin:4px 0}
+  h2{font-size:24px;font-weight:900;letter-spacing:1px}
+  .line{border-top:2px dashed #000;margin:8px 0}
+  table{width:100%;border-collapse:collapse;font-size:14px;font-weight:700}
+  th,td{padding:4px 2px}
+  th{border-bottom:2px solid #000;text-align:left;font-size:13px;font-weight:900}
+  .totals td{padding:4px 2px;font-size:14px;font-weight:700}
+  .grand td{font-size:20px;font-weight:900;border-top:3px solid #000;padding-top:8px}
+  .footer{text-align:center;font-size:10px;margin-top:10px;line-height:1.4}
+  .badge{display:inline-block;padding:3px 10px;border:2px solid #000;border-radius:10px;font-size:13px;font-weight:900;margin:2px}
+  .center{text-align:center}
+</style></head><body>
+
+<h2>${escapeHtml(RESTAURANT.name)}</h2>
+<div class="center" style="font-size:10px">${escapeHtml(RESTAURANT.address)}</div>
+<div class="center" style="font-size:10px">Ph: ${RESTAURANT.phones.join(" / ")}</div>
+<div class="center" style="font-size:10px">GSTIN: ${escapeHtml(billCustomerGstin || "—")}</div>
+
+<div class="line"></div>
+<div style="display:flex;justify-content:space-between;font-size:11px">
+  ${billNoLine}
+  <div><b>${order.orderType === "parcel" ? "PARCEL" : "T-" + escapeHtml(String(order.table))}</b></div>
+</div>
+<div style="font-size:10px;text-align:center;margin-top:4px">${now}</div>
+
+${order.waiter ? `<div style="font-size:10px;margin-top:4px">Waiter: ${escapeHtml(order.waiter)}</div>` : ""}
+<div style="font-size:10px">Customer: ${escapeHtml(billCustomerName || "Walk-in")}${billCustomerPhone ? ` · ${escapeHtml(billCustomerPhone)}` : ""}</div>
+
+<div class="line"></div>
+<table>
+  <thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Rate</th><th style="text-align:right">Amt</th></tr></thead>
+  <tbody>${itemsHtml}</tbody>
+</table>
+<div class="line"></div>
+
+<table class="totals">
+  <tr><td>Subtotal</td><td style="text-align:right">₹${sub}</td></tr>
+  ${billDiscountPct > 0 ? `<tr><td>Discount (${billDiscountPct}%)</td><td style="text-align:right">-₹${discPctAmt}</td></tr>` : ""}
+  ${discAmt > 0 ? `<tr><td>Extra Discount</td><td style="text-align:right">-₹${discAmt}</td></tr>` : ""}
+  ${gstRate > 0 ? `<tr><td>GST @ ${gstRate}%</td><td style="text-align:right">+₹${gst}</td></tr>` : ""}
+  <tr class="grand"><td>GRAND TOTAL</td><td style="text-align:right">₹${total}</td></tr>
+</table>
+
+<div class="line"></div>
+<div class="center">
+  <span class="badge">${payLabel}</span>
+  <span class="badge">${billPayStatus === "paid" ? "PAID" : "PENDING"}</span>
+</div>
+
+${billNotes ? `<div style="font-size:10px;margin-top:8px;border-top:1px dashed #000;padding-top:6px"><b>Notes:</b> ${escapeHtml(billNotes)}</div>` : ""}
+
+<div class="footer">
+  <div>** Thank you! Visit again **</div>
+  <div>${escapeHtml(RESTAURANT.tagline)}</div>
+  <div style="margin-top:6px">Rate us on Google</div>
+</div>
+
+</body></html>`);
+    w.document.close();
+
+    setTimeout(() => {
+      try { w.focus(); w.print(); } catch (e) { alert("⚠️ Print nahi ho paya: " + e.message); }
+    }, 400);
+  };
   return (
     <div style={{ padding: "26px 20px 60px", maxWidth: 1200, margin: "0 auto" }}>
       <KitchenNotificationColumn orders={active} selectedOrderId={selectedOrderId} onSelect={setSelectedOrderId} />
@@ -3205,7 +3458,8 @@ function StaffView({ orders, advanceStatus, requestPinPrompt, calls, resolveCall
                         <button onClick={(e) => { e.stopPropagation(); advanceStatus(o.id, status); }} style={{ flex: 1, padding: "14px 12px", border: "none", borderRadius: 12, fontWeight: 800, fontSize: 14, cursor: "pointer", background: status === "ready" ? COLORS.sage : (status === "preparing" ? COLORS.copper : COLORS.ink), color: "#fff" }}>
                           {status === "new" ? "👨‍🍳 Start Cooking" : status === "preparing" ? "✅ Mark Ready" : "🍽️ Mark Served"}
                         </button>
-                        <button onClick={(e) => { e.stopPropagation(); handlePrintReceipt(o); }} style={{ background: isSelected ? 'rgba(255,255,255,0.25)' : COLORS.paper2, color: isSelected ? '#fff' : COLORS.ink, border: 'none', width: 48, height: 48, borderRadius: 12, fontSize: 20, cursor: 'pointer' }}>🖨️</button>
+                        <button onClick={(e) => { e.stopPropagation(); handlePrintReceipt(o); }} title="Print KOT (Kitchen)" style={{ background: isSelected ? 'rgba(255,255,255,0.25)' : COLORS.paper2, color: isSelected ? '#fff' : COLORS.ink, border: 'none', width: 44, height: 48, borderRadius: 12, fontSize: 18, cursor: 'pointer' }}>🍳</button>
+                        <button onClick={(e) => { e.stopPropagation(); openBillEditor(o); }} title="Edit & Print Bill" style={{ background: COLORS.sage, color: '#fff', border: 'none', width: 52, height: 48, borderRadius: 12, fontSize: 18, cursor: 'pointer', fontWeight: 800 }}>🧾</button>
                         <button onClick={(e) => { e.stopPropagation(); if (window.confirm(`Cancel order #${o.id.slice(1, 5)}?`)) { cancelOrderByStaff && cancelOrderByStaff(o.id); } }} style={{ background: 'transparent', color: isSelected ? '#fff' : COLORS.error, border: `1.5px solid ${isSelected ? 'rgba(255,255,255,0.5)' : COLORS.error}`, width: 48, height: 48, borderRadius: 12, fontSize: 18, cursor: 'pointer', fontWeight: 800 }}>✕</button>
                       </div>
                     </div>
@@ -3217,12 +3471,305 @@ function StaffView({ orders, advanceStatus, requestPinPrompt, calls, resolveCall
           );
         })}
       </div>
+
+      {/* 🧾 BILL EDITOR MODAL */}
+      {billOrder && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)', zIndex: 200, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
+          onClick={() => setBillOrder(null)}>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="slide-up"
+            style={{ background: '#fff', width: '100%', maxWidth: 520, maxHeight: '94vh', overflowY: 'auto', borderRadius: '24px 24px 0 0', padding: '20px' }}>
+
+            {/* HEADER */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+              <div>
+                <div style={{ fontFamily: "'Outfit', sans-serif", fontSize: 22, fontWeight: 800 }}>🧾 Edit & Print Bill</div>
+                <div style={{ fontSize: 12, color: COLORS.textLight, marginTop: 2 }}>
+                  Order #{billOrder.id.slice(1, 9).toUpperCase()} · {billOrder.orderType === 'parcel' ? '🛍️ Parcel' : `🍽️ Table ${billOrder.table}`}
+                </div>
+              </div>
+              <button onClick={() => setBillOrder(null)} style={{ background: 'rgba(0,0,0,0.05)', border: 'none', borderRadius: '50%', width: 36, height: 36, fontSize: 18, cursor: 'pointer' }}>✕</button>
+            </div>
+
+            {/* CUSTOMER DETAILS */}
+            <div style={{ background: COLORS.paper, borderRadius: 14, padding: 14, marginBottom: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5, color: COLORS.textLight, marginBottom: 10 }}>👤 Customer Details</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+                <input placeholder="Customer Name" value={billCustomerName} onChange={(e) => setBillCustomerName(e.target.value)}
+                  style={{ padding: 10, border: `1.5px solid ${COLORS.line}`, borderRadius: 10, fontSize: 14, width: '100%', boxSizing: 'border-box' }} />
+                <input placeholder="Phone" value={billCustomerPhone} onChange={(e) => setBillCustomerPhone(e.target.value)}
+                  style={{ padding: 10, border: `1.5px solid ${COLORS.line}`, borderRadius: 10, fontSize: 14, width: '100%', boxSizing: 'border-box' }} />
+              </div>
+              <input placeholder="Customer GSTIN (optional)" value={billCustomerGstin} onChange={(e) => setBillCustomerGstin(e.target.value.toUpperCase())}
+                style={{ padding: 10, border: `1.5px solid ${COLORS.line}`, borderRadius: 10, fontSize: 14, width: '100%', boxSizing: 'border-box', fontFamily: "'JetBrains Mono', monospace" }} />
+            </div>
+
+            {/* ITEMS */}
+            <div style={{ background: COLORS.paper, borderRadius: 14, padding: 14, marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5, color: COLORS.textLight }}>🍽️ Items ({billEditItems.length})</div>
+                <button onClick={() => setBillAddItemOpen(!billAddItemOpen)}
+                  style={{ background: COLORS.info, color: '#fff', border: 'none', padding: '6px 12px', borderRadius: 8, fontWeight: 800, fontSize: 12, cursor: 'pointer' }}>
+                  {billAddItemOpen ? '✕ Close' : '➕ Add Item'}
+                </button>
+              </div>
+
+              {billAddItemOpen && (
+                <div style={{ background: '#fff', borderRadius: 10, padding: 10, marginBottom: 12, border: `1.5px solid ${COLORS.info}` }}>
+                  <input autoFocus placeholder="🔍 Search menu to add..." value={billSearch} onChange={(e) => setBillSearch(e.target.value)}
+                    style={{ padding: 10, border: `1.5px solid ${COLORS.line}`, borderRadius: 10, fontSize: 14, width: '100%', boxSizing: 'border-box', marginBottom: 8 }} />
+                  <div style={{ maxHeight: 200, overflowY: 'auto' }}>
+                    {(billSearch.trim()
+                      ? menu.filter((m) => m.available && m.name.toLowerCase().includes(billSearch.toLowerCase()))
+                      : menu.filter((m) => m.available).slice(0, 8)
+                    ).slice(0, 15).map((m) => (
+                      <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 4px', borderBottom: `1px solid ${COLORS.line}` }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div>
+                          <div style={{ fontSize: 11, color: COLORS.copper, fontWeight: 700 }}>₹{m.price}</div>
+                        </div>
+                        <button onClick={() => {
+                          const existing = billEditItems.findIndex((it) => it.itemId === m.id && !it.portion);
+                          if (existing >= 0) {
+                            const updated = [...billEditItems];
+                            updated[existing] = { ...updated[existing], qty: updated[existing].qty + 1 };
+                            setBillEditItems(updated);
+                          } else {
+                            setBillEditItems([...billEditItems, {
+                              itemId: m.id, name: m.name, portion: m.portion || '',
+                              price: m.price, qty: 1,
+                              _rowId: Date.now() + '_' + Math.random().toString(36).slice(2, 5),
+                            }]);
+                          }
+                        }} style={{ background: COLORS.sage, color: '#fff', border: 'none', padding: '6px 12px', borderRadius: 8, fontWeight: 800, fontSize: 12, cursor: 'pointer' }}>+ Add</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                {billEditItems.length === 0 && (
+                  <div style={{ textAlign: 'center', padding: 20, color: COLORS.textLight, fontSize: 13 }}>No items. Add some!</div>
+                )}
+                {billEditItems.map((it, idx) => (
+                  <div key={it._rowId || idx} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 4px', borderBottom: `1px solid ${COLORS.line}` }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {it.name} {it.portion ? <span style={{ color: COLORS.textLight, fontSize: 11 }}>({it.portion})</span> : null}
+                      </div>
+                      <div style={{ fontSize: 11, color: COLORS.copper, fontWeight: 700 }}>₹{it.price} × {it.qty} = ₹{it.price * it.qty}</div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, border: `1.5px solid ${COLORS.sage}`, borderRadius: 8, padding: '2px' }}>
+                      <button onClick={() => {
+                        const updated = [...billEditItems];
+                        if (updated[idx].qty <= 1) updated.splice(idx, 1);
+                        else updated[idx] = { ...updated[idx], qty: updated[idx].qty - 1 };
+                        setBillEditItems(updated);
+                      }} style={{ width: 26, height: 26, border: 'none', background: 'transparent', color: COLORS.sage, fontSize: 18, fontWeight: 800, cursor: 'pointer' }}>−</button>
+                      <span style={{ fontWeight: 800, fontSize: 13, minWidth: 16, textAlign: 'center' }}>{it.qty}</span>
+                      <button onClick={() => {
+                        const updated = [...billEditItems];
+                        updated[idx] = { ...updated[idx], qty: updated[idx].qty + 1 };
+                        setBillEditItems(updated);
+                      }} style={{ width: 26, height: 26, border: 'none', background: 'transparent', color: COLORS.sage, fontSize: 18, fontWeight: 800, cursor: 'pointer' }}>+</button>
+                    </div>
+                    <button onClick={() => {
+                      if (window.confirm(`Remove "${it.name}"?`)) {
+                        setBillEditItems(billEditItems.filter((_, i) => i !== idx));
+                      }
+                    }} style={{ background: 'transparent', border: `1.5px solid ${COLORS.error}`, color: COLORS.error, width: 32, height: 32, borderRadius: 8, fontSize: 14, cursor: 'pointer', fontWeight: 800 }}>✕</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* GST */}
+            <div style={{ background: COLORS.paper, borderRadius: 14, padding: 14, marginBottom: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5, color: COLORS.textLight, marginBottom: 10 }}>🧾 GST</div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {[0, 5, 12, 18].map((rate) => (
+                  <button key={rate} onClick={() => setBillGstRate(rate)}
+                    style={{
+                      padding: '8px 14px', borderRadius: 10,
+                      border: `2px solid ${billGstRate === rate ? COLORS.copper : COLORS.line}`,
+                      background: billGstRate === rate ? COLORS.copperLight : '#fff',
+                      color: billGstRate === rate ? COLORS.copperDark : COLORS.text,
+                      fontWeight: 800, fontSize: 13, cursor: 'pointer',
+                    }}>
+                    {rate === 0 ? 'No GST' : `${rate}%`}
+                  </button>
+                ))}
+                <button onClick={() => setBillGstRate('custom')}
+                  style={{
+                    padding: '8px 14px', borderRadius: 10,
+                    border: `2px solid ${billGstRate === 'custom' ? COLORS.copper : COLORS.line}`,
+                    background: billGstRate === 'custom' ? COLORS.copperLight : '#fff',
+                    color: billGstRate === 'custom' ? COLORS.copperDark : COLORS.text,
+                    fontWeight: 800, fontSize: 13, cursor: 'pointer',
+                  }}>
+                  Custom
+                </button>
+                {billGstRate === 'custom' && (
+                  <input type="number" placeholder="Rate %" value={billGstCustom} onChange={(e) => setBillGstCustom(e.target.value)}
+                    style={{ padding: '8px 12px', border: `1.5px solid ${COLORS.line}`, borderRadius: 10, fontSize: 14, width: 100, fontWeight: 800 }} />
+                )}
+              </div>
+            </div>
+
+            {/* DISCOUNT */}
+            <div style={{ background: COLORS.paper, borderRadius: 14, padding: 14, marginBottom: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5, color: COLORS.textLight, marginBottom: 10 }}>🎁 Discount</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: COLORS.textLight, display: 'block', marginBottom: 4 }}>Percent (%)</label>
+                  <input type="number" min={0} max={100} value={billDiscountPct || ''}
+                    onChange={(e) => setBillDiscountPct(Math.min(100, Math.max(0, Number(e.target.value) || 0)))}
+                    placeholder="0"
+                    style={{ padding: 10, border: `1.5px solid ${COLORS.line}`, borderRadius: 10, fontSize: 14, width: '100%', boxSizing: 'border-box', fontWeight: 700 }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: COLORS.textLight, display: 'block', marginBottom: 4 }}>Flat (₹)</label>
+                  <input type="number" min={0} value={billDiscount || ''}
+                    onChange={(e) => setBillDiscount(Math.max(0, Number(e.target.value) || 0))}
+                    placeholder="0"
+                    style={{ padding: 10, border: `1.5px solid ${COLORS.line}`, borderRadius: 10, fontSize: 14, width: '100%', boxSizing: 'border-box', fontWeight: 700 }} />
+                </div>
+              </div>
+            </div>
+
+            {/* PAYMENT */}
+            <div style={{ background: COLORS.paper, borderRadius: 14, padding: 14, marginBottom: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5, color: COLORS.textLight, marginBottom: 10 }}>💳 Mode of Payment</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
+                {[
+                  { id: 'cash', icon: '💵', label: 'Cash' },
+                  { id: 'upi', icon: '📱', label: 'UPI' },
+                  { id: 'card', icon: '💳', label: 'Card' },
+                  { id: 'razorpay', icon: '⚡', label: 'Razorpay' },
+                  { id: 'due', icon: '⏳', label: 'Due' },
+                ].map((m) => (
+                  <button key={m.id} onClick={() => setBillPayMode(m.id)}
+                    style={{
+                      padding: '10px 6px', borderRadius: 10,
+                      border: `2px solid ${billPayMode === m.id ? COLORS.copper : COLORS.line}`,
+                      background: billPayMode === m.id ? COLORS.copperLight : '#fff',
+                      color: billPayMode === m.id ? COLORS.copperDark : COLORS.text,
+                      fontWeight: 800, fontSize: 12, cursor: 'pointer',
+                      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+                    }}>
+                    <span style={{ fontSize: 18 }}>{m.icon}</span>
+                    <span>{m.label}</span>
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {['paid', 'pending'].map((s) => (
+                  <button key={s} onClick={() => setBillPayStatus(s)}
+                    style={{
+                      flex: 1, padding: '10px', borderRadius: 10,
+                      border: `2px solid ${billPayStatus === s ? (s === 'paid' ? COLORS.success : COLORS.warning) : COLORS.line}`,
+                      background: billPayStatus === s ? (s === 'paid' ? 'rgba(16,185,129,0.15)' : 'rgba(255,152,0,0.15)') : '#fff',
+                      color: billPayStatus === s ? (s === 'paid' ? COLORS.success : '#E65100') : COLORS.text,
+                      fontWeight: 800, fontSize: 13, cursor: 'pointer',
+                    }}>
+                    {s === 'paid' ? '✓ Paid' : '⏳ Pending'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* BILL NO TOGGLE + NOTES */}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 12, padding: 10, background: COLORS.paper, borderRadius: 10 }}>
+              <input type="checkbox" checked={billShowBillNo} onChange={(e) => setBillShowBillNo(e.target.checked)} style={{ width: 18, height: 18 }} />
+              <span style={{ fontWeight: 700, fontSize: 13 }}>🧾 Print Bill Number on receipt</span>
+            </label>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 0.5, color: COLORS.textLight, marginBottom: 6 }}>📝 Notes</div>
+              <textarea placeholder="Special instructions / bill notes..." value={billNotes} onChange={(e) => setBillNotes(e.target.value)} rows={2}
+                style={{ padding: 12, border: `1.5px solid ${COLORS.line}`, borderRadius: 10, fontSize: 14, width: '100%', boxSizing: 'border-box', resize: 'none' }} />
+            </div>
+
+            {/* TOTALS PREVIEW */}
+            <div style={{ background: 'linear-gradient(135deg, #fdfbfb, #ebedee)', borderRadius: 14, padding: 16, marginBottom: 16, border: `1.5px solid ${COLORS.gold}` }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
+                <span>Subtotal</span>
+                <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 }}>₹{billCalc.sub}</span>
+              </div>
+              {billDiscountPct > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: COLORS.success, marginBottom: 6 }}>
+                  <span>Discount ({billDiscountPct}%)</span>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 }}>-₹{billCalc.discPctAmt}</span>
+                </div>
+              )}
+              {billDiscount > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: COLORS.success, marginBottom: 6 }}>
+                  <span>Extra Discount</span>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 }}>-₹{billCalc.discAmt}</span>
+                </div>
+              )}
+              {billCalc.gstRate > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: COLORS.copper, marginBottom: 6 }}>
+                  <span>GST @ {billCalc.gstRate}%</span>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 }}>+₹{billCalc.gst}</span>
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 18, fontWeight: 800, borderTop: `2px solid ${COLORS.ink}`, paddingTop: 10, marginTop: 6 }}>
+                <span>GRAND TOTAL</span>
+                <span style={{ fontFamily: "'JetBrains Mono', monospace", color: COLORS.copper }}>₹{billCalc.total}</span>
+              </div>
+            </div>
+
+            {/* ACTIONS */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+              <button onClick={async () => {
+                const saved = await saveBillEdits();
+                if (saved) setBillOrder(null);
+              }}
+                style={{ padding: 14, borderRadius: 12, border: `2px solid ${COLORS.sage}`, background: 'transparent', color: COLORS.sage, fontWeight: 800, fontSize: 14, cursor: 'pointer' }}>
+                💾 Save Only
+              </button>
+              <button onClick={async () => {
+                const saved = await saveBillEdits();
+                if (saved) {
+                  setBillOrder(null);
+                  setTimeout(() => printFinalBill(saved, billEditItems), 200);
+                }
+              }}
+                style={{ padding: 14, borderRadius: 12, border: 'none', background: COLORS.info, color: '#fff', fontWeight: 800, fontSize: 14, cursor: 'pointer' }}>
+                🖨️ Save & Print
+              </button>
+            </div>
+            <button onClick={async () => {
+              const saved = await saveBillEdits();
+              if (saved) {
+                if (billOrder.status === "ready") await advanceStatus(billOrder.id, "ready");
+                setBillOrder(null);
+                setTimeout(() => printFinalBill(saved, billEditItems), 200);
+              }
+            }}
+              style={{ width: '100%', padding: 16, borderRadius: 14, border: 'none', background: COLORS.sage, color: '#fff', fontWeight: 800, fontSize: 15, cursor: 'pointer', marginBottom: 10 }}>
+              ✓ Mark Paid & Print Bill
+            </button>
+
+            <div style={{ fontSize: 11, color: COLORS.textLight, textAlign: 'center', lineHeight: 1.5 }}>
+              💡 Save karne se bill Firestore mein update hoga. Print aapke printer pe jayega.
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ==
-// 18. ADMIN VIEW
+
+// 18. ADMIN VIEW — HELPER COMPONENTS
+
+ 
 // ==
 
 function KitchenMetrics({ filteredOrders }) {
@@ -4526,12 +5073,9 @@ const unsubBookings = onSnapshot(collection(db, "bookings"), (snap) => {
   
   return () => { 
     unsubCalls(); 
-
-    unsubOrders(); unsubOpen(); 
-
-    unsubOrders(); unsubOpen(); 
+    unsubOpen();      // ← ye missing tha
+    unsubOrders(); 
     unsubBookings();
- c59ac2fe05533bcd14d01af2ee227a4555f0119c
   };
 }, []);
 
@@ -4559,7 +5103,8 @@ const unsubBookings = onSnapshot(collection(db, "bookings"), (snap) => {
   const removeOffer = async (id) => { setOffersList(offersList.filter(o => o.id !== id)); };
 
   const placeOrder = async (order) => {
-    try { if (order.coinsClaimed === undefined) order.coinsClaimed = false; await setDoc(doc(db, "orders", order.id), order); } catch (e) { console.error("placeOrder failed:", e); throw e; }
+    try { if (order.coinsClaimed === undefined) order.coinsClaimed = false; await setDoc(doc(db, "orders", order.id), order);
+    setOrdersState(prev => prev.some(x => x.id === order.id) ? prev : [...prev, order]); } catch (e) { console.error("placeOrder failed:", e); throw e; }
   };
 
   const advanceStatus = async (orderId, currentStatus) => {
@@ -4679,7 +5224,7 @@ const unsubBookings = onSnapshot(collection(db, "bookings"), (snap) => {
   
   {role === "customer" && <CustomerView menu={menu} orders={orders} placeOrder={placeOrder} bookEvent={bookEvent} gallery={gallery} offersList={offersList} table={table} setTable={setTable} requestPinPrompt={requestPinPrompt} settings={settings} isDark={isDark} setIsDark={setIsDark} requestWaiter={requestWaiter} loyaltyRules={loyaltyRules} loyaltyUsers={loyaltyUsers} coinHistory={coinHistory} setOrdersState={setOrdersState} categories={categories} flashSaleItems={validFlashSaleItems} comboOffers={validComboOffers} setMenuState={setMenuState} />}
   
-  {role === "staff" && <StaffView orders={orders} advanceStatus={advanceStatus} requestPinPrompt={requestPinPrompt} calls={calls} resolveCall={resolveCall} cancelOrderByStaff={cancelOrderByStaff} />}
+  {role === "staff" && <StaffView menu={menu} orders={orders} advanceStatus={advanceStatus} requestPinPrompt={requestPinPrompt} calls={calls} resolveCall={resolveCall} cancelOrderByStaff={cancelOrderByStaff} />}
   
   {role === "admin" && <AdminView menu={menu} setMenuState={setMenuState} bookings={bookings} orders={orders} markPaid={markPaid} requestPinPrompt={requestPinPrompt} inventory={inventory} addInventory={addInventory} updateStock={updateStock} deleteBooking={deleteBooking} offersList={offersList} addOffer={addOffer} removeOffer={removeOffer} loyaltyRules={loyaltyRules} setLoyaltyRules={setLoyaltyRules} loyaltyUsers={loyaltyUsers} settings={settings} setSettings={setSettings} gallery={gallery} setGallery={setGallery} categories={categories} updateCategories={updateCategories} flashSaleItems={flashSaleItems} setFlashSaleItems={setFlashSaleItems} comboOffers={comboOffers} setComboOffers={setComboOffers} savePromotions={savePromotions} />}
   
