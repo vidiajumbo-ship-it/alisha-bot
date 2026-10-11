@@ -1,0 +1,9 @@
+alisha-bot/
+├── app.py                  # Main Flask app
+├── firebase_config.py      # Firestore setup
+├── ai_helper.py            # Gemini calls (chat, insights, voice, order parse)
+├── admin_handler.py        # Admin commands
+├── customer_handler.py     # Customer flow
+├── requirements.txt
+├── serviceAccountKey.json  # Firebase (env mein daalna)
+└── .env
